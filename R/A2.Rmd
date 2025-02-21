@@ -1,0 +1,545 @@
+---
+title: "A2"
+author: "Jiao"
+date: "2025-02-18"
+output: html_document
+---
+
+
+```{r}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(ggbeeswarm)
+library(tidygeocoder)
+library(leaflet)
+library(png)
+library(grid)
+```
+
+```{r}
+setwd("/Users/jiaozhao/MIT Dropbox/Jiao Zhao/Datavis/A2")
+df_or <- read_csv("A2_EDA_Residential.csv")
+```
+# Data Quality 
+## Check for missing values
+
+```{r}
+# Calculate total rows
+total_rows <- nrow(df_or)
+
+# Create table of missing values
+missing_table <- data.frame(
+  Column = names(df_or),
+  Missing_Count = colSums(is.na(df_or)),
+  Missing_Percent = round(colSums(is.na(df_or))/total_rows * 100, 2)
+)
+
+# Filter only columns with missing values and sort by percentage
+missing_table <- missing_table[missing_table$Missing_Count > 0, ]
+missing_table <- missing_table[order(-missing_table$Missing_Percent), ]
+
+# Create visualization using ggplot2
+library(ggplot2)
+
+ggplot(missing_table, aes(x = Missing_Percent, y = reorder(Column, -Missing_Percent) )) +
+  geom_bar(stat = "identity", fill = "grey") +
+  geom_text(aes(label = paste0(Missing_Percent, "%")), vjust = -0.5) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Percentage of Missing Values by Column",
+       x = "Missing Values (%)" ,
+       y = "Column Name" )
+print( missing_table$Column)
+```
+
+```{r}
+# Get column types and names
+str_result <- str(df_or)
+
+# Identify binary columns (checking if they only contain 0/1)
+binary_cols <- names(df_or)[sapply(df_or, function(x) {
+  all(x %in% c(0,1, NA))  # Including NA as possible value
+})]
+
+# Get numeric columns (excluding binary)
+numeric_cols <- names(df_or)[sapply(df_or, is.numeric)]
+numeric_cols <- setdiff(numeric_cols, binary_cols)
+
+# Get character columns
+character_cols <- names(df_or)[sapply(df_or, is.character)]
+
+```
+```{r}
+# More detailed check for each binary column
+binary_check <- lapply(df_or[binary_cols], function(x) {
+  unique_vals <- sort(unique(x))
+  val_counts <- table(x, useNA = "ifany")
+  
+  list(
+    unique_values = unique_vals,
+    value_counts = val_counts,
+    is_true_binary = all(unique_vals %in% c(0,1, NA))
+  )
+})
+
+# Print results
+for(col in names(binary_check)) {
+  cat("\nColumn:", col, "\n")
+  cat("Unique values:", paste(binary_check[[col]]$unique_values, collapse = ", "), "\n")
+  cat("Value counts:\n")
+  print(binary_check[[col]]$value_counts)
+  if(!binary_check[[col]]$is_true_binary) {
+    cat("WARNING: Contains values other than 0/1!\n")
+  }
+}
+```
+```{r}
+# Check zeros in numeric non-binary columns
+zero_counts <- sapply(df_or[numeric_cols], function(x) {
+  zero_count <- sum(x == 0, na.rm = TRUE)
+  total_count <- length(x)
+  zero_percentage <- (zero_count/total_count) * 100
+  c(zero_count = zero_count, 
+    percentage = round(zero_percentage, 2))
+})
+
+# Create a readable output
+zero_summary <- data.frame(
+  Column = numeric_cols,
+  Zero_Count = zero_counts[1,],
+  Zero_Percentage = zero_counts[2,]
+)
+
+# Print results
+print("Summary of zeros in numeric non-binary columns:")
+print(zero_summary)
+
+```
+
+
+## examine is the address correct
+```{r}
+# For latitude:
+lat_range <- range(df_or$lat, na.rm = TRUE)
+print(lat_range)
+
+# For longitude:
+lon_range <- range(df_or$lon, na.rm = TRUE)
+print(lon_range)
+
+```
+```{r}
+# 1. Subset rows with invalid coordinates (lat == 0 or lon == 0)
+df_invalid <- df_or %>% 
+  filter(lat == 0 | lon == 0)
+
+# 2. Create a full address field that includes both the address and ZIP code
+df_invalid <- df_invalid %>% 
+  mutate(address_full = paste(address, zip, sep = ", "))
+
+# 3. Geocode the problematic rows.
+#    The geocode function will overwrite the existing 'lat' and 'lon' columns.
+df_invalid_geocoded <- df_invalid %>%
+  geocode(address = address_full, method = "census", lat = "lat", long = "lon")
+
+# 4. Merge the updated rows back into the original dataset.
+#    First, keep the rows that already had valid coordinates.
+df_valid <- df_or %>% 
+  filter(!(lat == 0 | lon == 0))
+
+# Now combine the valid rows with the geocoded (updated) rows.
+df_or <- bind_rows(df_valid, df_invalid_geocoded)
+
+# Verify that there are no rows with lat or lon equal to 0
+df_or %>% filter(lat == 0 | lon == 0)
+```
+```{r}
+# First, let's check how many invalid coordinates we have
+print("Number of rows with invalid coordinates:")
+nrow(df_or %>% filter(lat == 0 | lon == 0))
+
+# Look at the invalid data
+print("Sample of invalid coordinates:")
+df_or %>% 
+  filter(lat == 0 | lon == 0) %>%
+  select(address, zip, lat, lon) %>%
+  head()
+
+# Modified approach:
+# 1. First check if we actually have any rows with lat/lon = 0
+invalid_coords <- df_or %>% 
+  filter(lat == 0 | lon == 0)
+
+if(nrow(invalid_coords) > 0) {
+  # Create full address with proper formatting
+  invalid_coords <- invalid_coords %>% 
+    mutate(address_full = paste(address, "Boston, MA", zip, sep = ", "))
+  
+  print("Sample of addresses to be geocoded:")
+  print(head(invalid_coords$address_full))
+  
+  # Try geocoding with more detailed error handling
+  tryCatch({
+    invalid_coords_geocoded <- invalid_coords %>%
+      geocode(address = address_full, 
+             method = "census",
+             lat = "lat", 
+             long = "lon",
+             quiet = FALSE)  # Added to see more details
+    
+    print("Geocoding results:")
+    print(head(invalid_coords_geocoded))
+  }, error = function(e) {
+    print("Geocoding error:")
+    print(e)
+  })
+}
+```
+
+```{r}
+# First check the ranges
+lat_range <- range(df_or$lat, na.rm = TRUE)
+lon_range <- range(df_or$lon, na.rm = TRUE)
+
+# Print the ranges
+cat("Latitude range:", lat_range[1], "to", lat_range[2], "\n")
+cat("Longitude range:", lon_range[1], "to", lon_range[2], "\n")
+
+# Create boundary data frame
+boston_bounds <- data.frame(
+  xmin = -71.1912,
+  xmax = -71.0026,
+  ymin = 42.2352,
+  ymax = 42.3975
+)
+
+# Create the plot
+library(ggplot2)
+
+ggplot() +
+  geom_point(data = df_or, aes(x = lon, y = lat), alpha = 0.1) +
+  geom_rect(data = boston_bounds, 
+            aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            fill = NA, color = "red") +
+  theme_minimal() +
+  labs(title = "Properties Distribution",
+       subtitle = "Red rectangle shows official Boston boundaries",
+       x = "Longitude",
+       y = "Latitude") +
+  coord_fixed()
+
+```
+```{r}
+# Save original row count
+original_count <- nrow(df_or)
+
+# Filter to keep only properties within Boston boundaries
+df_or_boston <- df_or %>%
+  filter(lat >= 42.2352 & lat <= 42.3975 &
+         lon >= -71.1912 & lon <= -71.0026)
+
+# Get new row count
+boston_count <- nrow(df_or_boston)
+
+# Print summary
+cat("Original number of properties:", original_count, "\n")
+cat("Properties within Boston boundaries:", boston_count, "\n")
+cat("Properties removed:", original_count - boston_count, "\n")
+
+# Visualize the filtered data
+ggplot() +
+  geom_point(data = df_or_boston, aes(x = lon, y = lat), alpha = 0.1) +
+  geom_rect(aes(xmin = -71.1912, xmax = -71.0026,
+                ymin = 42.2352, ymax = 42.3975),
+            fill = NA, color = "red") +
+  theme_minimal() +
+  labs(title = "Properties Within Boston Boundaries",
+       x = "Longitude",
+       y = "Latitude") +
+  coord_fixed()
+```
+
+```{r}
+df <- df_or_boston
+```
+
+```{r}
+combination_summary <- df %>%
+  count(investor_type_purchase_value, investor_type_sale_value) %>%
+  mutate(percentage = 100 * n / sum(n))
+
+combination_summary
+```
+```{r}
+# Subset 1: Filter out rows where both buy_side_flip and sell_side_flip are 0
+df1 <- df %>% 
+  filter(!(buy_side_flip == 0 & sell_side_flip == 0))
+
+# Subset 2: Filter out rows where flip_term equals "Non-flip"
+df2 <- df %>% 
+  filter(flip_term != "Non-flip")
+
+# Compare row counts
+cat("Rows in df1: ", nrow(df1), "\n")
+cat("Rows in df2: ", nrow(df2), "\n")
+
+# Check if both subsets have the same rows (ignoring order)
+if(setequal(df1, df2)) {
+  print("The two filters yield the same rows.")
+} else {
+  print("The two filters do NOT yield the same rows.")
+}
+
+# Optionally, check which rows are in one set but not the other
+only_in_df1 <- anti_join(df1, df2, by = names(df))
+only_in_df2 <- anti_join(df2, df1, by = names(df))
+
+cat("Rows only in df1: ", nrow(only_in_df1), "\n")
+cat("Rows only in df2: ", nrow(only_in_df2), "\n")
+
+```
+
+
+
+# Time Variation
+
+```{r}
+
+# Create a new column for the year and count transactions per year
+df_yearly <- df %>%
+  mutate(year = year(date)) %>%  # Extract the year
+  group_by(year) %>%
+  summarise(transaction_count = n()) %>%
+  ungroup()
+
+# Print the summarized data
+print(df_yearly)
+
+# Plot the total number of transactions per year
+ggplot(df_yearly, aes(x = factor(year), y = transaction_count)) +
+  geom_col(fill = "black") +
+  labs(title = "Transactions per Year", x = "Year", y = "Number of Transactions") +
+  theme_minimal()+
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+```
+```{r}
+df_flipquick <- df %>% 
+  filter(flip_ind != 0)
+
+# Create a new column for the year and count transactions per year for flipped transactions
+df_flipquick_yearly <- df_flipquick %>%
+  mutate(year = year(date)) %>%  # Extract the year from the date column
+  group_by(year) %>%
+  summarise(transaction_count = n()) %>%
+  ungroup()
+
+# Print the summarized data
+print(df_flipquick_yearly)
+
+# Plot the total number of flip transactions per year
+ggplot(df_flipquick_yearly, aes(x = factor(year), y = transaction_count)) +
+  geom_col(fill = "black") +
+  labs(title = "Transactions that flipped with in two years ", x = "Year", y = "Number of Flip Transactions") +
+  theme_minimal()+
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+```
+```{r}
+# Filter out rows where both buy_side_flip and sell_side_flip equal 0
+df_flip <- df %>%
+  filter(!(buy_side_flip == 0 & sell_side_flip == 0))
+
+# Summarize the data by year for the remaining transactions
+df_flip_yearly <- df_flip %>%
+  mutate(year = year(date)) %>%  # Extract the year from the date column
+  group_by(year) %>%
+  summarise(transaction_count = n()) %>%
+  ungroup()
+
+# Print the summarized data
+print(df_flip_yearly)
+
+# Plot the number of transactions per year for these flip-related transactions
+ggplot(df_flip_yearly, aes(x = factor(year), y = transaction_count)) +
+  geom_col(fill = "black") +
+  labs(title = "Flip-Related Transactions per Year",
+       x = "Year",
+       y = "Number of Transactions") +
+  theme_minimal() +
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+```
+```{r}
+df_flipterm_yearly <- df %>%
+  mutate(year = year(date)) %>%    # Extract the year
+  group_by(year, flip_term) %>%      # Group by both year and flip_term
+  summarise(transaction_count = n()) %>%  
+  ungroup()
+
+df_flipterm_yearly <- df_flipterm_yearly %>%
+  mutate(flip_term = factor(flip_term,
+                            levels = c( "Long-term", "Medium-term", "Short-term", "Non-flip")))
+
+
+ggplot(df_flipterm_yearly, aes(x = factor(year), y = transaction_count, fill = flip_term)) +
+   geom_col() +
+  scale_fill_manual(
+    values = c(
+      "Long-term"   = "#1f77b4",
+      "Medium-term" = "#ff7f0e",
+      "Short-term"  = "#2ca02c",
+      "Non-flip"    = "grey80"     # Gray for Non-flip
+    )
+  ) +
+  labs(title = "Flip-Related Transactions per Year by Flip Term",
+       x = "Year",
+       y = "Number of Transactions",
+       fill = "Flip Term") +
+  theme_minimal() +
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+
+```
+```{r}
+df_flipterm2_yearly <- df %>%
+  filter(!flip_term == "Non-flip") %>%
+  mutate(year = year(date)) %>%    # Extract the year
+  group_by(year, flip_term) %>%      # Group by both year and flip_term
+  summarise(transaction_count = n()) %>%  
+  ungroup()
+
+df_flipterm2_yearly <- df_flipterm2_yearly %>%
+  mutate(flip_term = factor(flip_term,
+                            levels = c( "Long-term", "Medium-term", "Short-term")))
+
+
+ggplot(df_flipterm2_yearly, aes(x = factor(year), y = transaction_count, fill = flip_term)) +
+   geom_col() +
+  scale_fill_manual(
+    values = c(
+      "Long-term"   = "#1f77b4",
+      "Medium-term" = "#ff7f0e",
+      "Short-term"  = "#2ca02c")
+  ) +
+  labs(title = "Flip-Related Transactions per Year by Flip Term",
+       x = "Year",
+       y = "Number of Transactions",
+       fill = "Flip Term") +
+  theme_minimal() +
+  theme(
+  axis.text.x = element_text(angle = 45, hjust = 1)
+)
+```
+```{r}
+
+df_investorpurchase_yearly <- df %>%
+  mutate(year = year(date)) %>%    # Extract the year
+  group_by(year, investor_type_purchase) %>%      # Group by both year and flip_term
+  summarise(transaction_count = n()) %>%  
+  ungroup()
+
+df_investorpurchase_yearly$investor_type_purchase <- factor(
+  df_investorpurchase_yearly$investor_type_purchase,
+  levels = c("Small", "Medium", "Large", "Institutional", "Non-investor")
+)
+
+ggplot(df_investorpurchase_yearly, aes(x = factor(year), y = transaction_count, fill = investor_type_purchase)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c(
+      "Small"         = "#ff7f0e",   # Example color
+      "Medium"        = "#2ca02c",
+      "Large"         = "#d62728",
+      "Institutional" = "#1f77b4",
+      "Non-investor"  = "grey80"     # Gray for Non-investor
+    )
+  ) +
+  labs(title = "Transactions per Year by investor purchase type",
+       x = "Year",
+       y = "Number of Transactions",
+       fill = "investor type") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+```{r}
+df_investorsale_yearly <- df %>%
+  mutate(year = year(date)) %>%    # Extract the year
+  group_by(year, investor_type_sale) %>%      # Group by both year and flip_term
+  summarise(transaction_count = n()) %>%  
+  ungroup()
+
+df_investorsale_yearly$investor_type_sale <- factor(
+  df_investorsale_yearly$investor_type_sale,
+  levels = c("Small", "Medium", "Large", "Institutional", "Non-investor")
+)
+
+ggplot(df_investorsale_yearly, aes(x = factor(year), y = transaction_count, fill = investor_type_sale)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c(
+      "Small"         = "#ff7f0e",   # Example color
+      "Medium"        = "#2ca02c",
+      "Large"         = "#d62728",
+      "Institutional" = "#1f77b4",
+      "Non-investor"  = "grey80"     # Gray for Non-investor
+    )
+  ) +
+  labs(title = "Transactions per Year by investor sale type",
+       x = "Year",
+       y = "Number of Transactions",
+       fill = "investor type") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+# Spatial 
+```{r}
+leaflet(df) %>%
+  addTiles() %>%  # Adds a default OpenStreetMap layer
+  addCircleMarkers(lng = ~lon, lat = ~lat,
+                   popup = ~address,  # Show address on click (or any field)
+                   radius = 1,
+                   color = "red")
+```
+100 Lovejoy Wharf #5A???  
+```{r}
+
+# Customize the URL parameters (center, zoom, size, style) as needed.
+mapbox_url <- "https://api.mapbox.com/styles/v1/mapbox/light-v11/static/[-71.24,42.24,-70.65,42.66]/300x400?access_token=pk.eyJ1Ijoiamlhb3p6eiIsImEiOiJjbTdhM2RlOHIwYno5MmtxMzl3ZnMwM3A1In0.8sWV25CZjcj9xRLffcfBmA"
+
+# Download the image to a temporary file
+temp_file <- tempfile(fileext = ".png")
+download.file(mapbox_url, temp_file, mode = "wb")
+
+# Read the image
+bg_img <- readPNG(temp_file)
+bg_grob <- rasterGrob(bg_img, width = unit(1, "npc"), height = unit(1, "npc"))
+
+# Define the geographic extent corresponding to the static map (adjust these values)
+
+xmin_val <- -71.2
+xmax_val <- -70.8
+ymin_val <- 42.24
+ymax_val <- 42.40
+
+# Your dataset (with lon/lat)
+# df <- your data frame with columns 'lon' and 'lat'
+
+# Plot with ggplot2
+ggplot() +
+  annotation_custom(bg_grob, xmin = xmin_val, xmax = xmax_val, ymin = ymin_val, ymax = ymax_val) +
+  geom_point(data = df, aes(x = lon, y = lat), color = "red", size = 2, alpha = 0.8) +
+  coord_fixed(xlim = c(xmin_val, xmax_val), ylim = c(ymin_val, ymax_val)) +
+  labs(title = "Real Estate Transactions on a Mapbox Basemap") +
+  theme_minimal()
+```
+
