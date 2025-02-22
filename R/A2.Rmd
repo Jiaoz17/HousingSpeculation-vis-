@@ -4,8 +4,11 @@ author: "Jiao"
 date: "2025-02-18"
 output: html_document
 ---
+```{r}
+getwd()
+```
 
-
+### load Library /Data 
 ```{r}
 library(readr)
 library(tidyverse)
@@ -15,10 +18,13 @@ library(tidygeocoder)
 library(leaflet)
 library(png)
 library(grid)
+library(plotly)     # for interactive charts
+library(htmlwidgets) # for saving widgets
+library(DT) 
 ```
 
 ```{r}
-setwd("/Users/jiaozhao/MIT Dropbox/Jiao Zhao/Datavis/A2")
+setwd("/Users/jiaozhao/MIT Dropbox/Jiao Zhao/Datavis/HousingSpeculation-vis-/Data")
 df_or <- read_csv("A2_EDA_Residential.csv")
 ```
 # Data Quality 
@@ -268,9 +274,9 @@ df <- df_or_boston
 combination_summary <- df %>%
   count(investor_type_purchase_value, investor_type_sale_value) %>%
   mutate(percentage = 100 * n / sum(n))
-
 combination_summary
 ```
+
 ```{r}
 # Subset 1: Filter out rows where both buy_side_flip and sell_side_flip are 0
 df1 <- df %>% 
@@ -299,13 +305,446 @@ cat("Rows only in df1: ", nrow(only_in_df1), "\n")
 cat("Rows only in df2: ", nrow(only_in_df2), "\n")
 
 ```
+# settings for html 
+```{r}
+# At the start of your R script or in a setup chunk of RMarkdown
+# Create standard settings for interactive plots
+
+# Function for plotly plots
+save_interactive_plot <- function(p, filename, 
+                                width = 800,    # 2/3 of 1200px
+                                height = 500) {
+  
+  # Add standard layout settings
+  p <- p %>%
+    layout(
+      autosize = TRUE,
+      width = width,
+      height = height,
+      margin = list(l = 50, r = 50, t = 50, b = 50),
+      paper_bgcolor = "white",
+      plot_bgcolor = "white",
+      font = list(family = "Arial", size = 12)
+    )
+  
+  # Save with standard settings
+  saveWidget(
+    widget = p,
+    file = file.path("www", "plots", filename),
+    selfcontained = TRUE,
+    title = filename
+  )
+}
+
+# Function for leaflet maps
+save_leaflet_map <- function(m, filename,
+                           width = 800,
+                           height = 500) {
+  
+  # Add standard settings to map
+  m <- m %>%
+    setView(lng = 0, lat = 0, zoom = 2) %>%  # Set default view
+    sizing(width = width,
+           height = height)
+  
+  saveWidget(
+    widget = m,
+    file = file.path("www", "plots", filename),
+    selfcontained = TRUE,
+    title = filename
+  )
+}
+```
+#### For plotly plots
+p <- plot_ly(data, x = ~time, y = ~value) %>%
+  add_lines()
+save_interactive_plot(p, "timeseries.html")
+
+#### For leaflet maps
+m <- leaflet(data) %>%
+  addTiles() %>%
+  addCircleMarkers()
+save_leaflet_map(m, "spatial.html")
+
+#### If you need different dimensions for a specific plot:
+save_interactive_plot(p, "wide_plot.html", 
+                     width = 1000, 
+                     height = 400)
+
+```{r}
+# At the start of your R script or in a setup chunk of RMarkdown
+# Set default dimensions for all saved plots
+knitr::opts_chunk$set(
+  fig.width = 10,  # 2/3 width ratio (800px/96dpi ≈ 8.33 inches)
+  fig.height = 6,
+  dpi = 144,
+  dev = "png",
+  bg = "white"
+)
+
+# Create a custom theme for web-friendly plots
+theme_web <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.margin = margin(20, 20, 20, 20),
+    text = element_text(family = "Arial"),
+    # Add more theme elements as needed
+  )
+}
+
+# Set as default theme
+theme_set(theme_web())
+
+# Create a standard save function
+save_web_plot <- function(plot, filename) {
+  ggsave(
+    paste0("www/plots/", filename),
+    plot = plot,
+    width = 10,
+    height = 6,
+    dpi = 144,
+    bg = "white"
+  )
+}
+```
+
+SAVE ggplot
+my_plot <- ggplot(data, aes(x, y)) +
+  geom_point()
+save_web_plot(my_plot, "analysis1.png")
+
+# Exploration
+## Something to do with address NONO 
+
+```{r}
+# Your existing data preparation code remains the same
+address_freq <- df_or %>%
+  group_by(address) %>%
+  summarise(
+    transaction_count = n()
+  ) %>%
+  arrange(desc(transaction_count))
+
+transaction_summary <- address_freq %>%
+  group_by(transaction_count) %>%
+  summarise(
+    number_of_addresses = n()
+  ) %>%
+  arrange(transaction_count)
+
+# Create a centered pyramid plot with pink-red gradient
+ggplot(transaction_summary, aes(x = transaction_count)) +
+  # Create mirror bars using positive and negative values
+  geom_col(aes(y = number_of_addresses/2, 
+               fill = transaction_count), 
+           position = "identity") +
+  geom_col(aes(y = -number_of_addresses/2, 
+               fill = transaction_count), 
+           position = "identity") +
+  coord_flip() +
+  theme_minimal() +
+  # Create a gradient color scale from light pink to dark red
+  scale_fill_gradient(low = "#FFB6C1",  # light pink
+                     high = "#8B0000",   # dark red
+                     name = "Transaction Count") +
+  # Modify the y-axis to show absolute values
+  scale_y_continuous(labels = function(x) abs(x)) +
+  labs(title = "Distribution of Transactions per Address",
+       y = "Number of Unique Addresses",
+       x = "Number of Transactions",
+       caption = "Shows how many addresses had each number of transactions") +
+  theme(
+    legend.position = "right",
+    panel.grid.major.y = element_blank(),  # Remove horizontal grid lines
+    axis.line = element_line(color = "black")
+  )
+
+# For log scale version:
+ggplot(transaction_summary, aes(x = transaction_count)) +
+  geom_col(aes(y = number_of_addresses/2, 
+               fill = transaction_count), 
+           position = "identity") +
+  geom_col(aes(y = -number_of_addresses/2, 
+               fill = transaction_count), 
+           position = "identity") +
+  coord_flip() +
+  theme_minimal() +
+  scale_fill_gradient(low = "#FFB6C1",  # light pink
+                     high = "#8B0000",   # dark red
+                     name = "Transaction Count") +
+  # Use log scale for y-axis while keeping absolute values
+  scale_y_continuous(
+    trans = "pseudo_log",
+    labels = function(x) abs(x)
+  ) +
+  labs(title = "Distribution of Transactions per Address (Log Scale)",
+       y = "Number of Unique Addresses (Log Scale)",
+       x = "Number of Transactions",
+       caption = "Log scale view to better show the distribution") +
+  theme(
+    legend.position = "right",
+    panel.grid.major.y = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+```
+
+```{r}
+# Count transactions per address and create summary
+address_freq <- df_or %>%
+  group_by(address) %>%
+  summarise(transaction_count = n()) 
+
+transaction_summary <- address_freq %>%
+  group_by(transaction_count) %>%
+  summarise(number_of_addresses = n()) %>%
+  arrange(transaction_count) %>%
+  # Add cumulative and percentage calculations
+  mutate(
+    cumulative_addresses = cumsum(number_of_addresses),
+    total_addresses = sum(number_of_addresses),
+    pct_addresses = round(number_of_addresses/total_addresses * 100, 2),
+    cumulative_pct = round(cumulative_addresses/total_addresses * 100, 2)
+  )
+
+# Print summary statistics
+cat("Interesting statistics:\n")
+cat("Total unique addresses:", sum(transaction_summary$number_of_addresses), "\n")
+cat("Addresses with more than 1 transaction:", 
+    sum(transaction_summary$number_of_addresses[transaction_summary$transaction_count > 1]), "\n")
+cat("Maximum transactions for a single address:", max(transaction_summary$transaction_count), "\n")
+
+# Create enhanced visualization
+ggplot(transaction_summary, aes(x = transaction_count)) +
+  # Bar plot for frequency
+  geom_col(aes(y = number_of_addresses), fill = "steelblue", alpha = 0.6) +
+  # Line for cumulative percentage
+  geom_line(aes(y = cumulative_addresses, group = 1), 
+            color = "red", size = 1) +
+  # Add labels for notable points
+  geom_text(aes(y = number_of_addresses, 
+                label = paste0(pct_addresses, "%")),
+            vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Distribution of Property Transactions",
+       subtitle = "Showing both frequency and cumulative distribution",
+       x = "Number of Transactions per Address",
+       y = "Number of Addresses",
+       caption = "Blue bars: Frequency | Red line: Cumulative count") +
+  scale_x_continuous(breaks = seq(1, max(transaction_summary$transaction_count), by = 1)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+transaction_summary_multiple <- transaction_summary %>%
+  filter(transaction_count > 1)
+
+ggplot(transaction_summary_multiple, aes(x = transaction_count, y = number_of_addresses)) +
+  geom_col(fill = "darkred", alpha = 0.7) +
+  geom_text(aes(label = paste0(number_of_addresses, "\n(", pct_addresses, "%)")),
+            vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Focus on Properties with Multiple Transactions",
+       subtitle = "Highlighting addresses that were sold multiple times",
+       x = "Number of Transactions per Address",
+       y = "Number of Addresses") +
+  scale_x_continuous(breaks = seq(2, max(transaction_summary_multiple$transaction_count), by = 1))
+```
 
 
+## TOTAL MARKET SHARE  buy/ sell interactions 
+```{r}
+# Create the aggregated data excluding all Non-investor transactions
+market_share <- df_or %>%
+  # Filter out any transactions involving Non-investors
+  filter(investor_type_purchase != "Non-investor",
+         investor_type_sale != "Non-investor") %>%
+  group_by(investor_type_purchase, investor_type_sale) %>%
+  summarise(
+    transaction_count = n(),
+    .groups = 'drop'
+  ) %>%
+  # Calculate the percentage
+  mutate(
+    share_percentage = (transaction_count / sum(transaction_count)) * 100
+  )
+
+# Create the bubble plot
+ggplot(market_share, 
+       aes(x = investor_type_sale, 
+           y = investor_type_purchase)) +
+  # Add bubbles with explicit size mapping
+  geom_point(aes(size = share_percentage, 
+                 color = share_percentage),
+             alpha = 0.7) +
+  geom_text(aes(label = sprintf("%.1f%%", share_percentage)),
+            color = "white",  # Changed to white for better visibility on darker bubbles
+            size = 3) +
+  # Use the original color gradient
+  scale_color_gradient(
+    low = "#ce8888",    # Light pink
+    high = "#8B0000",   # Dark red
+    name = "Market Share (%)"
+  ) +
+  # Explicitly set size scale with lighter colored example points
+  scale_size(
+    range = c(10, 30),
+    name = "Market Share (%)",
+    guide = "none"
+  ) +
+  # Customize theme
+  theme_minimal() +
+  # Customize labels
+  labs(
+    title = "Market Share Distribution by Investor Types",
+    subtitle = "Institutional and Professional Investors Only",
+    x = "Seller Type",
+    y = "Buyer Type"
+  ) +
+  theme(
+    axis.text.x = element_text( hjust = 1),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) +
+  # Set axis with remaining investor types only
+  scale_x_discrete(limits = c("Institutional", "Large", "Medium", "Small")) +
+  scale_y_discrete(limits = c("Small", "Medium", "Large", "Institutional"))
+```
+
+```{r}
+# Create the aggregated data from binary fields
+market_share_binary <- df_or %>%
+  mutate(
+    buyer_type = case_when(
+      buyer_bnk_ind == 1 ~ "Bank",
+      buyer_bus_ind == 1 ~ "Business",
+      buyer_gov_ind == 1 ~ "Government",
+      buyer_gse_ind == 1 ~ "GSE",
+      buyer_llc_ind == 1 ~ "LLC"
+    ),
+    seller_type = case_when(
+      seller_bnk_ind == 1 ~ "Bank",
+      seller_bus_ind == 1 ~ "Business",
+      seller_gov_ind == 1 ~ "Government",
+      seller_gse_ind == 1 ~ "GSE",
+      seller_llc_ind == 1 ~ "LLC",
+      seller_trst_ind == 1 ~ "Trust"
+    )
+  ) %>%
+  filter(!is.na(buyer_type), !is.na(seller_type)) %>%
+  group_by(buyer_type, seller_type) %>%
+  summarise(
+    transaction_count = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    share_percentage = (transaction_count / sum(transaction_count)) * 100
+  )
+
+# Create the bubble plot
+ggplot(market_share_binary, 
+       aes(x = seller_type, 
+           y = buyer_type)) +
+  geom_point(aes(size = share_percentage, 
+                 color = share_percentage),
+             alpha = 0.9) +  # Increased alpha for more opacity
+  geom_text(aes(label = sprintf("%.1f%%", share_percentage)),
+            color = "white",  # Changed to white for better visibility on darker bubbles
+            size = 3) +
+  scale_color_gradient(
+    low = "#ce8888",     # Lighter pink
+    high = "#660000",    # Much darker red
+    name = "Market Share (%)"
+  ) +
+  scale_size(
+    range = c(10, 30),
+    guide = "none"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Market Share Distribution by Entity Types",
+    x = "Seller Entity Type",
+    y = "Buyer Entity Type"
+  ) +
+  theme(
+    axis.text.x = element_text(hjust = 1),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+##
+
+# Investor/value
+```{r}
+ggplot(df_or, aes(x = factor(inv_to_inv), y = prslpr)) +
+  # Add violin plot with darker colors
+  geom_violin(alpha = 0.9,                # Increased alpha for darker color
+             aes(fill = factor(inv_to_inv)),
+             color = NA) +  
+  
+  theme_minimal() +
+  labs(title = "Last Sale Price: Investor vs Non-Investor Transactions",
+       x = "Investor Transaction (0 = No, 1 = Yes)",
+       y = "Last Sale Price",
+       fill = "Investor Transaction") +
+  # Use darker colors for the violin plots
+  scale_fill_manual(values = c("#a05050", "#5063a0"),  # Darker pink and teal
+                   labels = c("Other Transactions", "Transactions between Investors")) +
+  theme(legend.position = "bottom") +
+  coord_cartesian(ylim = quantile(df_or$prslpr, c(0.01, 0.99), na.rm = TRUE))
+```
+
+```{r}
+ggplot(df_or %>% filter(flip_term != "Non-flip"), 
+       aes(x = factor(flip_term, 
+                     levels = c("Long-term", "Medium-term", "Short-term")), 
+           y = price_diff)) +
+  geom_violin(alpha = 0.9,                
+             aes(fill = flip_term),
+             color = NA) +  
+  theme_minimal() +
+  labs(title = "Price Differences Across Flip Terms",
+       x = "Flip Term Category",
+       y = "Price Difference ($)",
+       fill = "Flip Category") +
+  # Use custom colors for the three flip categories
+  scale_fill_manual(values = c("#66B2B2", "#99CC99", "#FFCC99"),
+                   labels = c("Long-term", "Medium-term", "Short-term")) +
+  theme(legend.position = "bottom") +
+  # Trim outliers
+  coord_cartesian(ylim = quantile(df_or$price_diff[df_or$flip_term != "Non-flip"], 
+                                 c(0.01, 0.99), na.rm = TRUE))
+```
+```{r}
+ggplot(df_or %>% filter(flip_term != "Non-flip"), 
+       aes(x = factor(flip_term, 
+                     levels = c("Long-term", "Medium-term", "Short-term")), 
+           y = prslpr)) +
+  geom_violin(alpha = 0.9,                
+             aes(fill = flip_term),
+             color = NA) +  
+  theme_minimal() +
+  labs(title = "Last Sale Price Distribution Across Flip Terms",
+       x = "Flip Term Category",
+       y = "Last Sale Price ($)",
+       fill = "Flip Category") +
+  # Use custom colors for the three flip categories
+  scale_fill_manual(values = c("#66B2B2", "#99CC99", "#FFCC99"),
+                   labels = c("Long-term", "Medium-term", "Short-term")) +
+  theme(legend.position = "bottom") +
+  # Trim outliers
+  coord_cartesian(ylim = quantile(df_or$prslpr[df_or$flip_term != "Non-flip"], 
+                                 c(0.01, 0.99), na.rm = TRUE))
+```
 
 # Time Variation
 
 ```{r}
-
 # Create a new column for the year and count transactions per year
 df_yearly <- df %>%
   mutate(year = year(date)) %>%  # Extract the year
@@ -325,6 +764,7 @@ ggplot(df_yearly, aes(x = factor(year), y = transaction_count)) +
   axis.text.x = element_text(angle = 45, hjust = 1)
 )
 ```
+
 ```{r}
 df_flipquick <- df %>% 
   filter(flip_ind != 0)
